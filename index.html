@@ -302,131 +302,83 @@ async function buscarContatos(cidades, bairros) {
 
 // ─── busca via pedidos (com filtro de data) ───────────────────────────────────
 async function buscarPedidos(cidades, bairros, dataDe, dataAte, sit) {
-  const map = {}; let p = 1;
-  while (Object.keys(map).length < 500) {
-    setStatus('loading', `Buscando pedidos — página ${p}...`);
-    const params = { pagina: p };
-    if (sit) params.situacao = sit;
-    // Filtra pela data de emissão (mais próxima da data prevista disponível na pesquisa)
-    if (dataDe) params.data_inicial = fmtBR(dataDe);
-    if (dataAte) params.data_final  = fmtBR(dataAte);
-    const ret   = await tinyPost('pedidos.pesquisa.php', params);
-    const items = ret?.pedidos || [];
-    if (!items.length) break;
-    // DEBUG: loga o primeiro pedido para ver campos disponíveis
-    if (p === 1 && items.length > 0) {
-      console.log('PEDIDO EXEMPLO:', JSON.stringify(items[0].pedido, null, 2));
-    }
-    for (const i of items) {
-      const pd = i.pedido; if (!pd) continue;
-      const id = pd.id_contato || pd.cliente?.id;
-      if (!id || map[id]) continue;
-      const ce = (pd.endereco_entrega?.cidade || pd.cliente?.cidade || '').toLowerCase();
-      const be = (pd.endereco_entrega?.bairro  || pd.cliente?.bairro  || '').toLowerCase();
-      if (cidades.length && !cidades.some(c => ce.includes(c))) continue;
-      if (bairros.length && !bairros.some(b  => be.includes(b)))  continue;
-      // Filtra por data prevista (campo "Previsto" no Tiny)
-      const dpStr = pd.data_prevista || pd.data_prevista_entrega || pd.previsao || '';
-      if (dataDe || dataAte) {
-        if (!dpStr) continue;
-        // converte dd/mm/yyyy para yyyy-mm-dd para comparar
-        const partes = dpStr.split('/');
-        const dpIso = partes.length === 3 ? `${partes[2]}-${partes[1]}-${partes[0]}` : dpStr;
-        if (dataDe && dpIso < dataDe) continue;
-        if (dataAte && dpIso > dataAte) continue;
+  const activeTags = [...document.querySelectorAll('#tags-wrap .tag.on')].map(t => t.dataset.tag);
+  const map = {};
+  const buscas = activeTags.length > 0 ? activeTags : [null];
+
+  for (const marcador of buscas) {
+    let p = 1;
+    while (Object.keys(map).length < 500) {
+      const label = marcador ? `marcador "${marcador}"` : 'todos';
+      setStatus('loading', `Buscando pedidos — ${label} — pág. ${p}...`);
+      const params = { pagina: p };
+      if (sit) params.situacao = sit;
+      if (marcador) params.marcadores = marcador;
+      if (dataDe) params.data_inicial = fmtBR(dataDe);
+      if (dataAte) params.data_final  = fmtBR(dataAte);
+
+      const ret = await tinyPost('pedidos.pesquisa.php', params);
+      await new Promise(r => setTimeout(r, 800));
+      const items = ret?.pedidos || [];
+
+      if (p === 1 && marcador === buscas[0]) {
+        console.log('PEDIDO EXEMPLO:', JSON.stringify(items[0]?.pedido, null, 2));
       }
-      map[id] = { id, dataPrev: dpStr, ee: pd.endereco_entrega||null, nome: pd.cliente?.nome||'' };
-      if (Object.keys(map).length >= 500) break;
+      if (!items.length) break;
+
+      for (const i of items) {
+        const pd = i.pedido; if (!pd) continue;
+        const id = pd.id_contato || pd.cliente?.id;
+        if (!id || map[id]) continue;
+        const ce = (pd.endereco_entrega?.cidade || pd.cliente?.cidade || '').toLowerCase();
+        const be = (pd.endereco_entrega?.bairro  || pd.cliente?.bairro  || '').toLowerCase();
+        if (cidades.length && !cidades.some(c => ce.includes(c))) continue;
+        if (bairros.length && !bairros.some(b  => be.includes(b)))  continue;
+
+        // Filtra data_prevista no browser
+        const dpStr = pd.data_prevista || pd.data_prevista_entrega || pd.previsao || pd.data_entrega || '';
+        if (dataDe || dataAte) {
+          if (!dpStr) continue;
+          const pts = dpStr.split('/');
+          const dpIso = pts.length === 3 ? `${pts[2]}-${pts[1]}-${pts[0]}` : dpStr;
+          if (dataDe && dpIso < dataDe) continue;
+          if (dataAte && dpIso > dataAte) continue;
+        }
+        map[id] = { id, dataPrev: dpStr, ee: pd.endereco_entrega||null, nome: pd.cliente?.nome||'', fone: pd.cliente?.fone||pd.cliente?.celular||'', email: pd.cliente?.email||'' };
+        if (Object.keys(map).length >= 500) break;
+      }
+      p++;
+      if (items.length < 100) break;
     }
-    p++;
-    if (items.length < 100) break;
+    await new Promise(r => setTimeout(r, 500));
   }
+
   const peds = Object.values(map);
   const lista = [];
   for (let i = 0; i < peds.length; i++) {
     const pd = peds[i];
-    setStatus('loading', `Carregando cliente ${i+1} de ${peds.length}...`);
+    setStatus('loading', `Carregando endereço ${i+1} de ${peds.length}...`);
     try {
       const ret = await tinyPost('contato.obter.php', { id: pd.id });
-      const c   = ret?.contato; if (!c) continue;
-      const e   = pd.ee;
+      const c = ret?.contato; if (!c) continue;
+      const e = pd.ee;
       lista.push({
-        nome:  c.nome||pd.nome,
-        end:   e?.endereco||c.endereco||'',
-        num:   e?.numero||c.numero||'',
-        comp:  e?.complemento||c.complemento||'',
-        bairro: e?.bairro||c.bairro||'',
-        cidade: e?.cidade||c.cidade||'',
-        uf:    e?.uf||c.uf||'',
-        cep:   e?.cep||c.cep||'',
-        fone:  c.fone||c.celular||'',
-        email: c.email||'',
+        nome:   c.nome||pd.nome, end: e?.endereco||c.endereco||'',
+        num:    e?.numero||c.numero||'', comp: e?.complemento||c.complemento||'',
+        bairro: e?.bairro||c.bairro||'', cidade: e?.cidade||c.cidade||'',
+        uf:     e?.uf||c.uf||'', cep: e?.cep||c.cep||'',
+        fone:   c.fone||c.celular||pd.fone||'', email: c.email||pd.email||'',
         dataPrev: pd.dataPrev
       });
     } catch(_) {
-      lista.push({ nome: pd.nome, end:'', num:'', comp:'', bairro:'', cidade:'', uf:'', cep:'', fone:'', email:'', dataPrev: pd.dataPrev });
+      lista.push({ nome: pd.nome, end:'', num:'', comp:'', bairro:'', cidade:'', uf:'', cep:'', fone: pd.fone||'', email: pd.email||'', dataPrev: pd.dataPrev });
     }
-    await new Promise(r => setTimeout(r, 1500));
+    await new Promise(r => setTimeout(r, 800));
   }
   return lista;
 }
 
-function mapContato(c, dataPrev) {
-  return { nome: c.nome||'', end: c.endereco||'', num: c.numero||'', comp: c.complemento||'', bairro: c.bairro||'', cidade: c.cidade||'', uf: c.uf||'', cep: c.cep||'', fone: c.fone||c.celular||'', email: c.email||'', dataPrev };
-}
 
-// ─── monta endereço completo no formato ZEO ───────────────────────────────────
-function endereco(c) {
-  const p = [];
-  const rua = [c.end, c.num].filter(Boolean).join(', ');
-  if (rua) p.push(rua);
-  if (c.bairro) p.push(c.bairro);
-  const cu = [c.cidade, c.uf].filter(Boolean).join(' - ');
-  if (cu) p.push(cu);
-  if (c.cep) p.push(c.cep);
-  return p.join(' - ');
-}
-
-// ─── gera xlsx idêntico ao modelo ─────────────────────────────────────────────
-function gerarXlsx(clientes, tempo) {
-  const INI = 0.29166666666666669; // 07:00
-  const FIM = 0.5;                 // 12:00
-  const header = [
-    'Nome Cliente*','endereço completo*','Carga',
-    'Janela de horário inicial','Janela de horário final',
-    'Tempo de serviço','Anotações/FORMA PAG',
-    'Latitude','Longitude','Identificação de referência',
-    'Habilidade necessária','Habilidade opcional',
-    'Pessoa de contato','Telefone de contato',
-    'Janela de horário inicial 2','Janela de horário final 2',
-    'Capacidade 2','Capacidade 3','Prioridade','SMS',
-    'Correio eletrônico de contato',
-    'Carga pick','Carga pick 2','Carga pick 3',
-    'Data agendada','Tipo de visita'
-  ];
-  const rows = clientes.map(c => [
-    c.nome, endereco(c), 1,
-    INI, FIM, parseInt(tempo), '',
-    '', '', c.comp||'',
-    '', '', c.nome, c.fone,
-    '', '', '', '', '', c.fone,
-    c.email, '', '', '',
-    c.dataPrev||'', ''
-  ]);
-  const ws = XLSX.utils.aoa_to_sheet([header, ...rows]);
-  ws['!cols'] = [
-    {wch:30},{wch:55},{wch:8},{wch:10},{wch:10},
-    {wch:10},{wch:20},{wch:10},{wch:10},{wch:20},
-    {wch:10},{wch:10},{wch:30},{wch:18},
-    {wch:10},{wch:10},{wch:10},{wch:10},{wch:10},{wch:18},
-    {wch:28},{wch:10},{wch:10},{wch:10},{wch:14},{wch:14}
-  ];
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'Plan');
-  return XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
-}
-
-// ─── ação principal ───────────────────────────────────────────────────────────
 async function gerarRota() {
   const btn = document.getElementById('btn-gerar');
   btn.disabled = true;
