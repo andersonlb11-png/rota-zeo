@@ -307,8 +307,9 @@ async function buscarPedidos(cidades, bairros, dataDe, dataAte, sit) {
     setStatus('loading', `Buscando pedidos — página ${p}...`);
     const params = { pagina: p };
     if (sit) params.situacao = sit;
-    // Busca todos os pedidos e filtra por data_prevista no cliente
-    // (a API não suporta filtro direto por data_prevista na pesquisa)
+    // Filtra pela data de emissão (mais próxima da data prevista disponível na pesquisa)
+    if (dataDe) params.data_inicial = fmtBR(dataDe);
+    if (dataAte) params.data_final  = fmtBR(dataAte);
     const ret   = await tinyPost('pedidos.pesquisa.php', params);
     const items = ret?.pedidos || [];
     if (!items.length) break;
@@ -365,7 +366,7 @@ async function buscarPedidos(cidades, bairros, dataDe, dataAte, sit) {
     } catch(_) {
       lista.push({ nome: pd.nome, end:'', num:'', comp:'', bairro:'', cidade:'', uf:'', cep:'', fone:'', email:'', dataPrev: pd.dataPrev });
     }
-    await new Promise(r => setTimeout(r, 300));
+    await new Promise(r => setTimeout(r, 1500));
   }
   return lista;
 }
